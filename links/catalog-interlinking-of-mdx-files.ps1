@@ -48,9 +48,21 @@ Where-Object {
     -not $ignore
 }
 
+# Recursively process each .mdx file while displaying an overall progress bar
+
+$totalFiles = $files.Count
+$currentFile = 0
+
 foreach($file in $files)
 {
-    Write-Host "Scanning $($file.FullName)"
+    $currentFile++
+
+    $percentComplete = [int](($currentFile / $totalFiles) * 100)
+
+    Write-Progress `
+        -Activity "Scanning MDX files" `
+        -Status "$currentFile of $totalFiles files" `
+        -PercentComplete $percentComplete
 
     $text = Get-Content -LiteralPath $file.FullName -Raw
 
@@ -91,6 +103,12 @@ $outFile = Join-Path -Path $RepoRoot -ChildPath "all-links-to-mdx-files.csv"
 $output |
 Sort-Object SourceRelativePath, LinkedRootPath |
 Export-Csv $outFile -NoTypeInformation -Encoding UTF8
+
+# Clear the progress bar
+
+Write-Progress -Activity "Scanning MDX files" -Completed
+
+# Final output 
 
 Write-Host ""
 Write-Host "Finished."
