@@ -3,9 +3,14 @@
 # Compatible with Windows PowerShell 5.1
 # =====================================================================
 
+# Prompt for the repository root folder.
+# Accepts the path with or without surrounding quotation marks.
 $RepoRoot = Read-Host "Enter repository root folder"
 
-if (!(Test-Path $RepoRoot))
+# Remove leading/trailing whitespace and enclosing double quotes (if present)
+$RepoRoot = $RepoRoot.Trim().Trim('"')
+
+if (!(Test-Path -LiteralPath $RepoRoot))
 {
     Write-Host "Folder not found."
     exit
@@ -47,7 +52,7 @@ foreach($file in $files)
 {
     Write-Host "Scanning $($file.FullName)"
 
-    $text = Get-Content $file.FullName -Raw
+    $text = Get-Content -LiteralPath $file.FullName -Raw
 
     # Markdown links
     $matches = [regex]::Matches(
@@ -81,7 +86,7 @@ foreach($file in $files)
     }
 }
 
-$outFile = Join-Path $RepoRoot "all-links-to-mdx-files.csv"
+$outFile = Join-Path -Path $RepoRoot -ChildPath "all-links-to-mdx-files.csv"
 
 $output |
 Sort-Object SourceRelativePath, LinkedRootPath |
