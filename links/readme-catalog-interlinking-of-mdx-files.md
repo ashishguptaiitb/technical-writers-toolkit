@@ -5,13 +5,12 @@ description: Offline, automated link check for root-relative cross-linking withi
 
 How it works, content governance use case, prerequisites, and limitations:
 
-* Generate two files and compare - one contains 
-* In each article, check links
+* Generate two files and compare. One file contains list of articles that are linked from all article and the other file contains a list of articles that exist in the repository. A diff between the two lists gives the broken links to help articles that don't exist in the repo.
 * Links to .mdx files must be root-relative and not relative. That is, format `[link text](/path/to/file/from/repo/root)` and not `[link text](../../relative/path/from/individual/file)`.
 * Works offline with minor manual intervention. Checking is automated.
-* Future scope - expand beyond .mdx file checks for 
+* Future scope - expand beyond .mdx file checks to also check for validity of anchors. It's a bit tricky as some special characters in headings get converted to a `-` in the URL anchors and some aren't. Mintlify-specific conversion of heading names to anchor needs to be checked first.
 
-## How to check 
+## How to check links
 
 1. Use PowerShell script [catalog-interlinking-of-mdx-files.ps1](/links/catalog-interlinking-of-mdx-files.ps1) from this repo. Read comments for how to run it. It generates `all-links-to-mdx-files.csv` file as output. The CSV contains these columns: `"SourceFile","SourceRelativePath","LinkedRootPath","Anchor"`.
 
