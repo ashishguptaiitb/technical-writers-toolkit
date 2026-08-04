@@ -18,14 +18,19 @@ How it works, content governance use case, prerequisites, and limitations:
 
    ![](/images/links/catalog-interlinking-of-mdx-files2.png)
 
-1. Import this .csv file in a spreadsheet and copy just the third column in a separate worksheet. It contains list of all files that are linked from any article in the repo. Some .mdx files contain multiple incoming links. Remove duplicate rows using AI tool or spreadsheet function.
+1. Import this .csv file in a spreadsheet and copy just the third column in a separate worksheet. It contains list of all files that are linked from any article in the repo. Some .mdx files contain multiple incoming links. Remove duplicate rows using AI tool or spreadsheet function. I use `UNIQUE` function in Google Sheets.
 
    ![](/images/links/catalog-interlinking-of-mdx-files3.png)
 
-1. Create a separate list of all files in the repo. On Windows, use `dir *.mdx /s/b > list-of-all-mdx-files-in-repo.txt` command. In this file, find-replace the first part of the local filesystem path to match the pattern of the root-relative path in the above .csv file.
+1. Create a separate list of all files in the repo. On Windows, use `dir *.mdx /s/b > list-of-all-mdx-files-in-repo.txt` command. In this file, find-replace the first part of the local filesystem path to match the pattern of the root-relative path in the above .csv file. For example, in .csv a script-generated file path is `/agent-platform/getting-started`, but the command-generated local file path is `C:\Users\Ashish.Gupta\Documents\GitHub\v2docs\agent-platform\getting-started.mdx`. I deleted `C:\Users\Ashish.Gupta\Documents\GitHub\v2docs` from the entire .txt file. Also, find-replace the slashes--`\` with `/`.
+
+1. Compare the two lists of files to find the differences. The linked files that don't exist in the repo are the broken links. Do one of the following:
+
+  * Use another PS script [tbd](/link/tbd) to compare the two files.
+  * Use a spreadsheet program to compare two columns containing both the lists of file paths for unique values. Sort the column of linked file paths.
 
    ![](/images/links/catalog-interlinking-of-mdx-files4.png)
 
-   ![](/images/links/catalog-interlinking-of-mdx-files5.png)
+1. Save the list of references to the files in a separate .txt file. This is a list of root-relative paths of .mdx files that don't exist in the repo but are used in some .mdx files.
 
-1. Use another PS script [tbd](/link/tbd) to compare the two files - one containing list of .mdx files in the repo and another containing list of links to .mdx files. All mismatches are reported and those are broken links.
+1. Use PS script [tbd](/link/tbd) to generate a CSV list of non-existent files and the .mdx files containing these links. Edit the latter articles to remove or replace the broken links.
