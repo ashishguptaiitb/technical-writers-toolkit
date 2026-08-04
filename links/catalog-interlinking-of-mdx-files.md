@@ -18,8 +18,14 @@ How it works, content governance use case, prerequisites, and limitations:
 
    ![](/images/links/catalog-interlinking-of-mdx-files2.png)
 
-1. Import this .csv in a spreadsheet and copy just the third column in a separate worksheet. It contains list of all files that are linked from any article in the repo. Some .mdx files contain multiple incoming links. Remove duplicate rows using AI tool or spreadsheet function.
+1. Import this .csv file in a spreadsheet and copy just the third column in a separate worksheet. It contains list of all files that are linked from any article in the repo. Some .mdx files contain multiple incoming links. Remove duplicate rows using AI tool or spreadsheet function.
 
-1. Create a separate list of all files in the repo. On Windows, use `dir /s/b > list-of-all-mdx-files-in-repo.txt` command. In this file, find-replace the first part of the local filesystem path to match the pattern of the root-relative path in the above .csv file.
+   ![](/images/links/catalog-interlinking-of-mdx-files3.png)
+
+1. Create a separate list of all files in the repo. On Windows, use `dir *.mdx /s/b > list-of-all-mdx-files-in-repo.txt` command. In this file, find-replace the first part of the local filesystem path to match the pattern of the root-relative path in the above .csv file.
+
+   ![](/images/links/catalog-interlinking-of-mdx-files4.png)
+
+   ![](/images/links/catalog-interlinking-of-mdx-files5.png)
 
 1. Use another PS script [tbd](/link/tbd) to compare the two files - one containing list of .mdx files in the repo and another containing list of links to .mdx files. All mismatches are reported and those are broken links.
