@@ -1,6 +1,8 @@
 # Provide full path of many files inside an input .txt file; add 1 path per row.
 # This script copies all these files in a destination folder (provides its path as well).
 # It preserves the folder hierarchy. It works for all file types.
+# Tip1: before running, ensure that the destination isn't a very long string. Windows has a char limit on full filepaths. We can use something as small as C:\1.
+# Tip2: after running the script, save the console's output to a temporary .txt file and search for errors. Can scroll in the console as well looking for errors highlighted in red color.
 
 
 $txtFilePath = Read-Host "Enter the path to your .txt file"
