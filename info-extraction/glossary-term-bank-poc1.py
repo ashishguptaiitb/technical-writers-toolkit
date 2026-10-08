@@ -2,33 +2,28 @@
 """
 MDX Glossary Term Bank Prototype
 
-Usage:
-python glossary_terms.py --input path --output path
-
 Purpose:
     Extract terminology candidates from a handpicked collection of MDX files.
 
-Processing:
+Pipeline:
     1. Recursively find .mdx files.
-    2. Remove MDX/Markdown noise while preserving useful prose.
+    2. Clean MDX/Markdown content.
     3. Preserve headings separately.
-    4. Use NLTK POS tagging to identify noun-phrase candidates.
-    5. Extract capitalized terms and acronyms.
-    6. Aggregate terms across files.
-    7. Capture source context for each term.
-
-Outputs:
-    term-bank.csv
-    term-contexts.csv
-    cleaned-text/<relative-path>.txt
+    4. Extract noun phrases using NLTK POS tagging.
+    5. Extract capitalized terms.
+    6. Extract acronyms.
+    7. Build terminology indexes incrementally while processing files.
+    8. Capture source-file and sentence context information.
+    9. Write term-bank.csv and term-contexts.csv.
 
 This prototype does NOT:
     - compare against an existing glossary
     - score candidates
     - use an LLM
-    - generate glossary definitions
+    - generate definitions
 
 Example:
+
     python glossary_terms.py --input "C:/Docs/agent-platform-term-bank" --output "C:/Docs/glossary-analysis"
 """
 
@@ -37,13 +32,15 @@ import csv
 import html
 import re
 import sys
+import time
+
 from collections import Counter, defaultdict
 from pathlib import Path
 
 
-# ---------------------------------------------------------------------------
-# NLTK imports
-# ---------------------------------------------------------------------------
+# ============================================================================
+# NLTK
+# ============================================================================
 
 try:
     import nltk
@@ -57,17 +54,12 @@ except ImportError:
     sys.exit(1)
 
 
-# ---------------------------------------------------------------------------
-# NLTK resource handling
-# ---------------------------------------------------------------------------
+# ============================================================================
+# NLTK RESOURCE CHECKING
+# ============================================================================
 
 def resource_available(resource_paths):
-    """
-    Return True if any of the supplied NLTK resource paths exists.
-
-    NLTK has changed some resource names across versions, so this
-    function allows us to support both older and newer layouts.
-    """
+    """Return True if at least one NLTK resource path exists."""
 
     for resource_path in resource_paths:
         try:
@@ -81,10 +73,9 @@ def resource_available(resource_paths):
 
 def ensure_nltk_resources():
     """
-    Verify that all NLTK datasets required by this script are available.
+    Verify all NLTK datasets required by this script.
 
-    This function does not automatically download resources. It reports
-    exactly what is missing so the user can install them explicitly.
+    Supports resource names used by both older and newer NLTK versions.
     """
 
     required = {
@@ -116,14 +107,17 @@ def ensure_nltk_resources():
 
     missing = []
 
-    for package_name, resource_paths in required.items():
-        if not resource_available(resource_paths):
+    for package_name, paths in required.items():
+
+        if not resource_available(paths):
             missing.append(package_name)
 
     if missing:
-        print("ERROR: One or more required NLTK resources are missing.")
+
         print()
-        print("Missing resources:")
+        print("ERROR: Required NLTK resources are missing.")
+        print()
+        print("Missing:")
 
         for resource in missing:
             print(f"  - {resource}")
@@ -135,7 +129,6 @@ def ensure_nltk_resources():
             "python -m nltk.downloader "
             + " ".join(missing)
         )
-        print()
 
         sys.exit(1)
 
@@ -143,29 +136,29 @@ def ensure_nltk_resources():
 
 
 def load_stopwords():
-    """
-    Load English stopwords after resource validation.
-    """
+    """Load English stopwords after resource validation."""
 
     try:
         return set(stopwords.words("english"))
+
     except LookupError:
+
+        print()
         print("ERROR: NLTK stopwords could not be loaded.")
         print()
-        print("Run:")
-        print("  python -m nltk.downloader stopwords")
+        print(
+            "Run: python -m nltk.downloader stopwords"
+        )
+
         sys.exit(1)
 
 
-# ---------------------------------------------------------------------------
-# MDX preprocessing
-# ---------------------------------------------------------------------------
+# ============================================================================
+# MDX CLEANUP
+# ============================================================================
 
 def remove_frontmatter(text):
-    """
-    Remove YAML frontmatter only when it appears at the beginning
-    of the document.
-    """
+    """Remove YAML frontmatter from the beginning of the document."""
 
     pattern = r"\A\s*---\s*\n.*?\n---\s*(?:\n|$)"
 
@@ -179,11 +172,7 @@ def remove_frontmatter(text):
 
 
 def extract_headings(text):
-    """
-    Extract Markdown headings before Markdown cleanup.
-
-    Returns a list of heading texts.
-    """
+    """Extract Markdown headings before Markdown cleanup."""
 
     headings = []
 
@@ -206,15 +195,7 @@ def extract_headings(text):
 
 
 def remove_fenced_code(text):
-    """
-    Remove fenced code blocks.
-
-    Supports:
-        ```
-        ```javascript
-        ~~~
-        ~~~yaml
-    """
+    """Remove fenced code blocks."""
 
     pattern = (
         r"(?ms)"
@@ -227,9 +208,7 @@ def remove_fenced_code(text):
 
 
 def remove_imports(text):
-    """
-    Remove common MDX import/export statements.
-    """
+    """Remove common MDX import/export statements."""
 
     text = re.sub(
         r"(?m)^\s*import\s+.*?;\s*$",
@@ -259,14 +238,7 @@ def remove_imports(text):
 
 
 def remove_images(text):
-    """
-    Remove Markdown images completely.
-
-    Examples:
-        ![alt](image.png)
-        ![alt](https://example.com/image.png)
-        ![alt][image-reference]
-    """
+    """Remove Markdown images."""
 
     text = re.sub(
         r"!\[[^\]]*\]\([^)]+\)",
@@ -284,9 +256,7 @@ def remove_images(text):
 
 
 def remove_urls(text):
-    """
-    Remove HTTP/HTTPS URLs.
-    """
+    """Remove HTTP and HTTPS URLs."""
 
     return re.sub(
         r"https?://[^\s<>)]+",
@@ -297,7 +267,7 @@ def remove_urls(text):
 
 def remove_inline_code(text):
     """
-    Remove inline code markers while retaining the visible code text.
+    Remove inline code markers while preserving the code text.
 
     Example:
         `agentId`
@@ -313,9 +283,7 @@ def remove_inline_code(text):
 
 
 def remove_jsx_comments(text):
-    """
-    Remove JSX comments.
-    """
+    """Remove JSX comments."""
 
     return re.sub(
         r"\{/\*.*?\*/\}",
@@ -327,7 +295,7 @@ def remove_jsx_comments(text):
 
 def remove_jsx_tags(text):
     """
-    Remove JSX and HTML tags while preserving text between tags.
+    Remove JSX/HTML tags while preserving visible text.
 
     Example:
 
@@ -349,52 +317,35 @@ def remove_jsx_tags(text):
     )
 
 
-def remove_jsx_expressions(text):
+def remove_simple_jsx_expressions(text):
     """
-    Remove simple JSX expressions such as:
+    Remove simple JSX expressions.
 
-        {variable}
-        {condition && <Component />}
-
-    This is intentionally conservative.
-
-    We avoid trying to parse arbitrary JavaScript.
+    This intentionally does not attempt to parse arbitrary JavaScript.
     """
 
-    # Remove simple one-line expressions.
-    text = re.sub(
+    return re.sub(
         r"\{[^{}\n]+\}",
         "",
         text,
     )
 
-    return text
-
 
 def remove_html_entities(text):
-    """
-    Decode HTML entities such as:
-        &amp;
-        &lt;
-        &quot;
-    """
+    """Decode HTML entities."""
 
     return html.unescape(text)
 
 
 def remove_markdown_links(text):
-    """
-    Preserve Markdown link text but remove its destination.
-    """
+    """Preserve link text while removing destinations."""
 
-    # Inline links.
     text = re.sub(
         r"\[([^\]]+)\]\([^)]+\)",
         r"\1",
         text,
     )
 
-    # Reference-style links.
     text = re.sub(
         r"\[([^\]]+)\]\[[^\]]*\]",
         r"\1",
@@ -408,8 +359,7 @@ def clean_table_syntax(text):
     """
     Remove Markdown table separator rows and cell delimiters.
 
-    Table content itself is retained because it can contain
-    useful terminology.
+    Table content is retained because tables may contain terminology.
     """
 
     lines = []
@@ -418,9 +368,6 @@ def clean_table_syntax(text):
 
         stripped = line.strip()
 
-        # Example:
-        # | --- | --- |
-        # | :--- | ---: |
         if re.fullmatch(
             r"\|?\s*:?-{2,}:?\s*"
             r"(\|\s*:?-{2,}:?\s*)+\|?",
@@ -436,18 +383,14 @@ def clean_table_syntax(text):
 
 
 def remove_markdown_formatting(text):
-    """
-    Remove Markdown formatting markers while retaining visible text.
-    """
+    """Remove Markdown formatting markers."""
 
-    # Bold + italic.
     text = re.sub(
         r"\*\*\*(.*?)\*\*\*",
         r"\1",
         text,
     )
 
-    # Bold.
     text = re.sub(
         r"\*\*(.*?)\*\*",
         r"\1",
@@ -460,7 +403,6 @@ def remove_markdown_formatting(text):
         text,
     )
 
-    # Italic.
     text = re.sub(
         r"(?<!\w)\*(.*?)\*(?!\w)",
         r"\1",
@@ -473,7 +415,6 @@ def remove_markdown_formatting(text):
         text,
     )
 
-    # Strikethrough.
     text = re.sub(
         r"~~(.*?)~~",
         r"\1",
@@ -484,11 +425,9 @@ def remove_markdown_formatting(text):
 
 
 def remove_markdown_structure(text):
-    """
-    Remove Markdown structural markers while retaining visible content.
-    """
+    """Remove Markdown structural markers."""
 
-    # Heading markers.
+    # Headings.
     text = re.sub(
         r"(?m)^\s{0,3}#{1,6}\s+",
         "",
@@ -520,9 +459,7 @@ def remove_markdown_structure(text):
 
 
 def normalize_whitespace(text):
-    """
-    Normalize whitespace while preserving line boundaries.
-    """
+    """Normalize whitespace while preserving line boundaries."""
 
     lines = []
 
@@ -544,14 +481,13 @@ def normalize_whitespace(text):
 
 def clean_mdx(text):
     """
-    Execute the complete MDX cleanup pipeline.
+    Execute the MDX cleanup pipeline.
 
     Returns:
         cleaned_text
         headings
     """
 
-    # Extract headings before removing Markdown structure.
     headings = extract_headings(text)
 
     text = remove_frontmatter(text)
@@ -561,14 +497,13 @@ def clean_mdx(text):
     text = remove_urls(text)
     text = remove_inline_code(text)
     text = remove_jsx_tags(text)
-    text = remove_jsx_expressions(text)
+    text = remove_simple_jsx_expressions(text)
     text = remove_html_entities(text)
     text = remove_markdown_links(text)
     text = clean_table_syntax(text)
     text = remove_markdown_formatting(text)
     text = remove_markdown_structure(text)
 
-    # Remove any remaining obvious HTML tags.
     text = re.sub(
         r"<[^>]+>",
         "",
@@ -582,9 +517,9 @@ def clean_mdx(text):
     return text, headings
 
 
-# ---------------------------------------------------------------------------
-# Linguistic processing
-# ---------------------------------------------------------------------------
+# ============================================================================
+# TERM EXTRACTION
+# ============================================================================
 
 GENERIC_TERMS = {
     "example",
@@ -640,7 +575,10 @@ NOUN_PHRASE_TAGS = {
 
 def normalize_term(term):
     """
-    Normalize a candidate term for comparison and aggregation.
+    Normalize a term for dictionary/index lookups.
+
+    This function is intentionally simple because it is called
+    frequently during extraction.
     """
 
     term = term.strip()
@@ -659,9 +597,7 @@ def normalize_term(term):
 
 
 def is_valid_term(term, stop_words):
-    """
-    Apply basic quality filters to a candidate term.
-    """
+    """Apply basic quality filters."""
 
     if not term:
         return False
@@ -673,7 +609,6 @@ def is_valid_term(term, stop_words):
 
     words = normalized.split()
 
-    # Reject single-word stopwords.
     if len(words) == 1:
 
         word = words[0]
@@ -687,14 +622,13 @@ def is_valid_term(term, stop_words):
         if len(word) < 3:
             return False
 
-    # Reject phrases containing only generic/stop words.
     if all(
-        word in GENERIC_TERMS or word in stop_words
+        word in GENERIC_TERMS
+        or word in stop_words
         for word in words
     ):
         return False
 
-    # Reject obvious syntax.
     if "://" in term:
         return False
 
@@ -708,9 +642,7 @@ def is_valid_term(term, stop_words):
 
 
 def build_phrase(tokens):
-    """
-    Build a clean phrase from POS-tagged tokens.
-    """
+    """Build a phrase from POS-tagged tokens."""
 
     words = [
         word
@@ -728,99 +660,113 @@ def build_phrase(tokens):
     return phrase.strip()
 
 
-def extract_noun_phrases(text, stop_words):
-    """
-    Extract noun-phrase candidates using NLTK POS tagging.
-
-    This intentionally uses transparent POS patterns rather than
-    a black-box semantic model.
-    """
+def extract_noun_phrases(
+    text,
+    stop_words,
+):
+    """Extract noun-phrase candidates using NLTK POS tagging."""
 
     if not text.strip():
         return []
 
     try:
+
         tokens = word_tokenize(text)
-    except LookupError as exc:
-        print()
-        print("ERROR: NLTK tokenizer resource is unavailable.")
-        print(str(exc))
+
+    except LookupError:
+
         print()
         print(
-            "Run: python -m nltk.downloader "
-            "punkt punkt_tab"
+            "ERROR: NLTK tokenizer resource is unavailable."
         )
+        print(
+            "Run: python -m nltk.downloader punkt punkt_tab"
+        )
+
         sys.exit(1)
 
     if not tokens:
         return []
 
     try:
+
         tagged = pos_tag(tokens)
-    except LookupError as exc:
+
+    except LookupError:
+
         print()
-        print("ERROR: NLTK POS tagger resource is unavailable.")
-        print(str(exc))
-        print()
+        print(
+            "ERROR: NLTK POS tagger resource is unavailable."
+        )
         print(
             "Run: python -m nltk.downloader "
             "averaged_perceptron_tagger "
             "averaged_perceptron_tagger_eng"
         )
+
         sys.exit(1)
 
     candidates = []
+
     current = []
 
     for word, tag in tagged:
 
         if tag in NOUN_PHRASE_TAGS:
+
             current.append(
                 (word, tag)
             )
+
             continue
 
         # Allow hyphens within compound terms.
         if word == "-" and current:
+
             current.append(
                 (word, tag)
             )
+
             continue
 
         if current:
 
-            phrase = build_phrase(current)
+            phrase = build_phrase(
+                current
+            )
 
             if is_valid_term(
                 phrase,
                 stop_words,
             ):
-                candidates.append(phrase)
+                candidates.append(
+                    phrase
+                )
 
             current = []
 
-    # Flush final phrase.
     if current:
 
-        phrase = build_phrase(current)
+        phrase = build_phrase(
+            current
+        )
 
         if is_valid_term(
             phrase,
             stop_words,
         ):
-            candidates.append(phrase)
+            candidates.append(
+                phrase
+            )
 
     return candidates
 
 
-def extract_capitalized_terms(text, stop_words):
-    """
-    Extract likely product terms based on capitalization.
-
-    Example:
-        Agent Runtime
-        Model Context Protocol
-    """
+def extract_capitalized_terms(
+    text,
+    stop_words,
+):
+    """Extract likely product terminology based on capitalization."""
 
     candidates = []
 
@@ -843,45 +789,38 @@ def extract_capitalized_terms(text, stop_words):
             term,
             stop_words,
         ):
-            candidates.append(term)
+            candidates.append(
+                term
+            )
 
     return candidates
 
 
 def extract_acronyms(text):
-    """
-    Extract likely acronyms such as API, SDK, NLP, and LLM.
-    """
+    """Extract likely acronyms."""
 
-    candidates = []
-
-    for match in re.finditer(
+    return re.findall(
         r"\b[A-Z]{2,8}(?:-[A-Z0-9]{1,8})?\b",
         text,
-    ):
-
-        candidates.append(
-            match.group(0)
-        )
-
-    return candidates
+    )
 
 
-# ---------------------------------------------------------------------------
-# Context extraction
-# ---------------------------------------------------------------------------
+# ============================================================================
+# SENTENCE / CONTEXT HANDLING
+# ============================================================================
 
 def split_sentences(text):
-    """
-    Split cleaned text into sentences.
-    """
+    """Split text into sentences."""
 
     if not text.strip():
         return []
 
     try:
+
         return nltk.sent_tokenize(text)
+
     except LookupError:
+
         # Conservative fallback.
         return re.split(
             r"(?<=[.!?])\s+",
@@ -889,53 +828,337 @@ def split_sentences(text):
         )
 
 
-def find_term_contexts(
-    term,
+def build_context_index(
     text,
-    max_contexts=5,
+    extracted_terms,
 ):
     """
-    Find sentences containing a term.
+    Build contexts only for terms actually found in the document.
 
-    Returns at most max_contexts unique sentences for a term
-    within a single source file.
+    Returns:
+
+        {
+            normalized_term: [context1, context2, ...]
+        }
     """
 
-    contexts = []
+    term_set = {
+        normalize_term(term)
+        for term in extracted_terms
+    }
 
-    normalized_term = normalize_term(term)
+    context_index = defaultdict(list)
 
-    for sentence in split_sentences(text):
+    if not term_set:
+        return context_index
 
-        if normalized_term in normalize_term(sentence):
+    sentences = split_sentences(text)
 
-            sentence = sentence.strip()
+    for sentence in sentences:
 
-            if (
-                sentence
-                and sentence not in contexts
+        sentence = sentence.strip()
+
+        if not sentence:
+            continue
+
+        normalized_sentence = normalize_term(
+            sentence
+        )
+
+        # Only check terms occurring in this document.
+        for term in term_set:
+
+            if term in normalized_sentence:
+
+                contexts = context_index[
+                    term
+                ]
+
+                if sentence not in contexts:
+
+                    contexts.append(
+                        sentence
+                    )
+
+                    # Limit contexts stored per term per file.
+                    if len(contexts) >= 5:
+                        continue
+
+    return context_index
+
+
+# ============================================================================
+# INCREMENTAL TERM INDEX
+# ============================================================================
+
+class TermIndex:
+    """
+    Global terminology index.
+
+    All information is updated as each MDX file is processed.
+
+    This avoids repeatedly scanning the entire corpus later.
+    """
+
+    def __init__(self):
+
+        self.frequency = Counter()
+
+        self.files = defaultdict(set)
+
+        self.types = defaultdict(set)
+
+        self.heading_count = Counter()
+
+        self.variants = defaultdict(Counter)
+
+        self.contexts = defaultdict(
+            lambda: defaultdict(list)
+        )
+
+    def add_term(
+        self,
+        term,
+        term_type,
+        file_name,
+    ):
+        """Add one extracted term occurrence."""
+
+        normalized = normalize_term(
+            term
+        )
+
+        if not normalized:
+            return
+
+        self.frequency[
+            normalized
+        ] += 1
+
+        self.files[
+            normalized
+        ].add(file_name)
+
+        self.types[
+            normalized
+        ].add(term_type)
+
+        self.variants[
+            normalized
+        ][term] += 1
+
+    def add_heading_term(
+        self,
+        term,
+    ):
+        """Record a heading occurrence."""
+
+        normalized = normalize_term(
+            term
+        )
+
+        if normalized:
+            self.heading_count[
+                normalized
+            ] += 1
+
+    def add_contexts(
+        self,
+        term,
+        file_name,
+        contexts,
+    ):
+        """Store contexts for a term in one source file."""
+
+        normalized = normalize_term(
+            term
+        )
+
+        if not normalized:
+            return
+
+        target = self.contexts[
+            normalized
+        ][file_name]
+
+        for context in contexts:
+
+            if context not in target:
+
+                target.append(
+                    context
+                )
+
+                if len(target) >= 5:
+                    break
+
+    def display_term(
+        self,
+        normalized_term,
+    ):
+        """Return the most common source representation."""
+
+        variants = self.variants.get(
+            normalized_term
+        )
+
+        if not variants:
+            return normalized_term
+
+        return variants.most_common(
+            1
+        )[0][0]
+
+    def build_term_rows(self):
+        """Build rows for term-bank.csv."""
+
+        rows = []
+
+        for normalized_term, frequency in (
+            self.frequency.items()
+        ):
+
+            files = sorted(
+                self.files[
+                    normalized_term
+                ]
+            )
+
+            rows.append(
+                {
+                    "Term": self.display_term(
+                        normalized_term
+                    ),
+
+                    "NormalizedTerm": (
+                        normalized_term
+                    ),
+
+                    "TermType": "; ".join(
+                        sorted(
+                            self.types[
+                                normalized_term
+                            ]
+                        )
+                    ),
+
+                    "Frequency": frequency,
+
+                    "DocumentCount": len(
+                        files
+                    ),
+
+                    "HeadingCount": (
+                        self.heading_count.get(
+                            normalized_term,
+                            0,
+                        )
+                    ),
+
+                    "SourceFiles": (
+                        "; ".join(files)
+                    ),
+                }
+            )
+
+        rows.sort(
+            key=lambda row: (
+                -row["DocumentCount"],
+                -row["Frequency"],
+                -row["HeadingCount"],
+                row["Term"].lower(),
+            )
+        )
+
+        return rows
+
+    def build_context_rows(self):
+        """Build rows for term-contexts.csv."""
+
+        rows = []
+
+        for normalized_term in self.frequency:
+
+            display_term = self.display_term(
+                normalized_term
+            )
+
+            file_contexts = self.contexts.get(
+                normalized_term,
+                {},
+            )
+
+            for file_name in sorted(
+                file_contexts
             ):
-                contexts.append(sentence)
 
-        if len(contexts) >= max_contexts:
-            break
+                contexts = file_contexts[
+                    file_name
+                ]
 
-    return contexts
+                occurrence_count = (
+                    self._count_term_in_file(
+                        normalized_term,
+                        file_name,
+                    )
+                )
+
+                for context in contexts:
+
+                    rows.append(
+                        {
+                            "Term": display_term,
+
+                            "MDXFile": file_name,
+
+                            "OccurrenceCount": (
+                                occurrence_count
+                            ),
+
+                            "Context": context,
+                        }
+                    )
+
+        return rows
+
+    def _count_term_in_file(
+        self,
+        normalized_term,
+        file_name,
+    ):
+        """
+        Return an approximate occurrence count based on
+        extracted-term occurrences for the source file.
+
+        This avoids rereading MDX files.
+        """
+
+        # We don't maintain per-file occurrence counts separately
+        # in this first prototype, so use the number of contexts
+        # as the safe diagnostic value.
+        contexts = self.contexts.get(
+            normalized_term,
+            {},
+        ).get(
+            file_name,
+            [],
+        )
+
+        return len(contexts)
 
 
-# ---------------------------------------------------------------------------
-# File processing
-# ---------------------------------------------------------------------------
+# ============================================================================
+# FILE PROCESSING
+# ============================================================================
 
 def process_file(
     file_path,
     input_root,
     cleaned_root,
     stop_words,
+    term_index,
 ):
-    """
-    Read, clean, and extract terminology from one MDX file.
-    """
+    """Process one MDX file."""
 
     try:
 
@@ -952,7 +1175,7 @@ def process_file(
             f"{file_path}: {exc}"
         )
 
-        return None
+        return False
 
     cleaned_text, headings = clean_mdx(
         text
@@ -962,9 +1185,15 @@ def process_file(
         input_root
     )
 
+    relative_name = str(
+        relative_path
+    ).replace("\\", "/")
+
     cleaned_path = (
         cleaned_root
-        / relative_path.with_suffix(".txt")
+        / relative_path.with_suffix(
+            ".txt"
+        )
     )
 
     cleaned_path.parent.mkdir(
@@ -983,18 +1212,24 @@ def process_file(
 
         print()
         print(
-            f"WARNING: Could not write cleaned "
-            f"file {cleaned_path}: {exc}"
+            f"WARNING: Could not write "
+            f"{cleaned_path}: {exc}"
         )
+
+    # ---------------------------------------------------------------
+    # Extract terminology.
+    # ---------------------------------------------------------------
 
     noun_phrases = extract_noun_phrases(
         cleaned_text,
         stop_words,
     )
 
-    capitalized_terms = extract_capitalized_terms(
-        cleaned_text,
-        stop_words,
+    capitalized_terms = (
+        extract_capitalized_terms(
+            cleaned_text,
+            stop_words,
+        )
     )
 
     acronyms = extract_acronyms(
@@ -1019,255 +1254,94 @@ def process_file(
             )
         )
 
-    return {
-        "file": str(
-            relative_path
-        ).replace("\\", "/"),
+    # ---------------------------------------------------------------
+    # Add all extracted terms to global index.
+    # ---------------------------------------------------------------
 
-        "cleaned_text": cleaned_text,
+    for term in noun_phrases:
 
-        "headings": headings,
-
-        "noun_phrases": noun_phrases,
-
-        "capitalized_terms": capitalized_terms,
-
-        "acronyms": acronyms,
-
-        "heading_terms": heading_terms,
-    }
-
-
-# ---------------------------------------------------------------------------
-# Term-bank generation
-# ---------------------------------------------------------------------------
-
-def get_display_term(
-    normalized_term,
-    results,
-):
-    """
-    Recover the most common readable capitalization/formatting
-    for a normalized term.
-    """
-
-    variants = Counter()
-
-    for result in results:
-
-        all_terms = (
-            result["noun_phrases"]
-            + result["capitalized_terms"]
-            + result["acronyms"]
-            + result["heading_terms"]
+        term_index.add_term(
+            term,
+            "noun_phrase",
+            relative_name,
         )
 
-        for term in all_terms:
+    for term in capitalized_terms:
 
-            if (
-                normalize_term(term)
-                == normalized_term
-            ):
-                variants[term] += 1
-
-    if variants:
-        return variants.most_common(1)[0][0]
-
-    return normalized_term
-
-
-def build_term_bank(results):
-    """
-    Aggregate terminology across the complete corpus.
-    """
-
-    term_occurrences = Counter()
-
-    term_files = defaultdict(set)
-
-    term_types = defaultdict(set)
-
-    term_heading_counts = Counter()
-
-    for result in results:
-
-        file_name = result["file"]
-
-        term_sources = [
-            (
-                "noun_phrase",
-                result["noun_phrases"],
-            ),
-            (
-                "capitalized_term",
-                result["capitalized_terms"],
-            ),
-            (
-                "acronym",
-                result["acronyms"],
-            ),
-        ]
-
-        for term_type, terms in term_sources:
-
-            for term in terms:
-
-                normalized = normalize_term(
-                    term
-                )
-
-                if not normalized:
-                    continue
-
-                term_occurrences[
-                    normalized
-                ] += 1
-
-                term_files[
-                    normalized
-                ].add(file_name)
-
-                term_types[
-                    normalized
-                ].add(term_type)
-
-        for term in result["heading_terms"]:
-
-            normalized = normalize_term(
-                term
-            )
-
-            if normalized:
-
-                term_heading_counts[
-                    normalized
-                ] += 1
-
-    rows = []
-
-    for normalized_term, frequency in (
-        term_occurrences.items()
-    ):
-
-        files = sorted(
-            term_files[
-                normalized_term
-            ]
+        term_index.add_term(
+            term,
+            "capitalized_term",
+            relative_name,
         )
 
-        display_term = get_display_term(
-            normalized_term,
-            results,
+    for term in acronyms:
+
+        term_index.add_term(
+            term,
+            "acronym",
+            relative_name,
         )
 
-        rows.append(
-            {
-                "Term": display_term,
-                "NormalizedTerm": normalized_term,
-                "TermType": "; ".join(
-                    sorted(
-                        term_types[
-                            normalized_term
-                        ]
-                    )
-                ),
-                "Frequency": frequency,
-                "DocumentCount": len(files),
-                "HeadingCount": (
-                    term_heading_counts.get(
-                        normalized_term,
-                        0,
-                    )
-                ),
-                "SourceFiles": "; ".join(
-                    files
-                ),
-            }
-        )
+    for term in heading_terms:
 
-    rows.sort(
-        key=lambda row: (
-            -row["DocumentCount"],
-            -row["Frequency"],
-            -row["HeadingCount"],
-            row["Term"].lower(),
-        )
-    )
-
-    return rows
-
-
-def build_context_rows(
-    results,
-    term_rows,
-):
-    """
-    Build term + source file + context records.
-    """
-
-    rows = []
-
-    for term_row in term_rows:
-
-        term = term_row["Term"]
-
-        normalized_term = normalize_term(
+        term_index.add_heading_term(
             term
         )
 
-        for result in results:
+    # ---------------------------------------------------------------
+    # Build context index for terms in this document only.
+    # ---------------------------------------------------------------
 
-            all_terms = (
-                result["noun_phrases"]
-                + result["capitalized_terms"]
-                + result["acronyms"]
-                + result["heading_terms"]
-            )
+    all_terms = (
+        noun_phrases
+        + capitalized_terms
+        + acronyms
+        + heading_terms
+    )
 
-            matching_count = sum(
-                1
-                for candidate in all_terms
-                if normalize_term(candidate)
-                == normalized_term
-            )
+    # Remove duplicates while retaining representation.
+    unique_terms = {}
 
-            if matching_count == 0:
-                continue
+    for term in all_terms:
 
-            contexts = find_term_contexts(
-                term,
-                result["cleaned_text"],
-                max_contexts=5,
-            )
+        normalized = normalize_term(
+            term
+        )
 
-            for context in contexts:
+        if normalized:
 
-                rows.append(
-                    {
-                        "Term": term,
-                        "MDXFile": result["file"],
-                        "OccurrenceCount": (
-                            matching_count
-                        ),
-                        "Context": context,
-                    }
-                )
+            unique_terms[
+                normalized
+            ] = term
 
-    return rows
+    context_index = build_context_index(
+        cleaned_text,
+        unique_terms.values(),
+    )
+
+    for normalized_term, contexts in (
+        context_index.items()
+    ):
+
+        term_index.add_contexts(
+            normalized_term,
+            relative_name,
+            contexts,
+        )
+
+    return True
 
 
-# ---------------------------------------------------------------------------
-# CSV output
-# ---------------------------------------------------------------------------
+# ============================================================================
+# CSV OUTPUT
+# ============================================================================
 
 def write_csv(
     path,
     rows,
     fieldnames,
 ):
-    """
-    Write UTF-8 CSV with BOM for convenient Excel handling.
-    """
+    """Write UTF-8 CSV with BOM."""
 
     try:
 
@@ -1283,22 +1357,23 @@ def write_csv(
             )
 
             writer.writeheader()
+
             writer.writerows(rows)
 
     except Exception as exc:
 
         print()
         print(
-            f"ERROR: Could not write CSV "
+            f"ERROR: Could not write "
             f"{path}: {exc}"
         )
 
         sys.exit(1)
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
+# ============================================================================
+# MAIN
+# ============================================================================
 
 def main():
 
@@ -1336,6 +1411,10 @@ def main():
     output_root = Path(
         args.output
     ).expanduser().resolve()
+
+    # ---------------------------------------------------------------
+    # Validate paths.
+    # ---------------------------------------------------------------
 
     if not input_root.exists():
 
@@ -1377,22 +1456,14 @@ def main():
         / "cleaned-text"
     )
 
-    try:
+    cleaned_root.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
 
-        cleaned_root.mkdir(
-            parents=True,
-            exist_ok=True,
-        )
-
-    except Exception as exc:
-
-        print(
-            f"ERROR: Could not create cleaned-text folder:\n"
-            f"  {cleaned_root}\n"
-            f"  {exc}"
-        )
-
-        sys.exit(1)
+    # ---------------------------------------------------------------
+    # Header.
+    # ---------------------------------------------------------------
 
     print()
     print(
@@ -1409,7 +1480,10 @@ def main():
     )
     print()
 
-    # Validate NLTK before loading stopwords.
+    # ---------------------------------------------------------------
+    # NLTK.
+    # ---------------------------------------------------------------
+
     ensure_nltk_resources()
 
     stop_words = load_stopwords()
@@ -1419,7 +1493,15 @@ def main():
         f"{len(stop_words)}"
     )
 
-    # Find MDX files recursively.
+    # ---------------------------------------------------------------
+    # Discover files.
+    # ---------------------------------------------------------------
+
+    print()
+    print(
+        "Discovering MDX files..."
+    )
+
     mdx_files = sorted(
         input_root.rglob("*.mdx")
     )
@@ -1428,8 +1510,7 @@ def main():
 
         print()
         print(
-            "ERROR: No .mdx files were found "
-            "under the input folder."
+            "ERROR: No .mdx files were found."
         )
 
         sys.exit(1)
@@ -1438,18 +1519,53 @@ def main():
         f"MDX files found: "
         f"{len(mdx_files)}"
     )
+
+    # ---------------------------------------------------------------
+    # Initialize global index.
+    # ---------------------------------------------------------------
+
+    term_index = TermIndex()
+
+    # ---------------------------------------------------------------
+    # Process files.
+    # ---------------------------------------------------------------
+
+    print()
+    print(
+        "Stage 1/3: Cleaning and extracting terms"
+    )
     print()
 
-    results = []
+    start_time = time.perf_counter()
+
+    successful = 0
+    failed = 0
+
+    total_files = len(
+        mdx_files
+    )
 
     for index, file_path in enumerate(
         mdx_files,
         start=1,
     ):
 
+        success = process_file(
+            file_path,
+            input_root,
+            cleaned_root,
+            stop_words,
+            term_index,
+        )
+
+        if success:
+            successful += 1
+        else:
+            failed += 1
+
         percent = int(
             index
-            / len(mdx_files)
+            / total_files
             * 100
         )
 
@@ -1458,7 +1574,7 @@ def main():
         filled = int(
             bar_length
             * index
-            / len(mdx_files)
+            / total_files
         )
 
         bar = (
@@ -1474,48 +1590,99 @@ def main():
         print(
             f"\r[{bar}] "
             f"{percent:3d}% "
-            f"{file_path.name:<50}",
+            f"{index}/{total_files} "
+            f"{file_path.name:<45}",
             end="",
             flush=True,
         )
 
-        result = process_file(
-            file_path,
-            input_root,
-            cleaned_root,
-            stop_words,
-        )
-
-        if result:
-            results.append(result)
+    elapsed = (
+        time.perf_counter()
+        - start_time
+    )
 
     print()
     print()
 
-    if not results:
-
-        print(
-            "ERROR: No MDX files could be processed."
-        )
-
-        sys.exit(1)
-
     print(
-        "Building term bank..."
-    )
-
-    term_rows = build_term_bank(
-        results
+        f"Files processed : {successful}"
     )
 
     print(
-        "Building term contexts..."
+        f"Files failed    : {failed}"
     )
 
-    context_rows = build_context_rows(
-        results,
-        term_rows,
+    print(
+        f"Extraction time : {elapsed:.1f} seconds"
     )
+
+    print(
+        f"Unique terms    : {len(term_index.frequency):,}"
+    )
+
+    # ---------------------------------------------------------------
+    # Build term bank.
+    # ---------------------------------------------------------------
+
+    print()
+    print(
+        "Stage 2/3: Building term-bank report"
+    )
+
+    start_time = time.perf_counter()
+
+    term_rows = (
+        term_index.build_term_rows()
+    )
+
+    term_elapsed = (
+        time.perf_counter()
+        - start_time
+    )
+
+    print(
+        f"Terms written: "
+        f"{len(term_rows):,}"
+    )
+
+    print(
+        f"Report preparation time: "
+        f"{term_elapsed:.1f} seconds"
+    )
+
+    # ---------------------------------------------------------------
+    # Build context report.
+    # ---------------------------------------------------------------
+
+    print()
+    print(
+        "Stage 3/3: Building context report"
+    )
+
+    start_time = time.perf_counter()
+
+    context_rows = (
+        term_index.build_context_rows()
+    )
+
+    context_elapsed = (
+        time.perf_counter()
+        - start_time
+    )
+
+    print(
+        f"Context records: "
+        f"{len(context_rows):,}"
+    )
+
+    print(
+        f"Context preparation time: "
+        f"{context_elapsed:.1f} seconds"
+    )
+
+    # ---------------------------------------------------------------
+    # Write CSVs.
+    # ---------------------------------------------------------------
 
     term_bank_path = (
         output_root
@@ -1552,6 +1719,10 @@ def main():
         ],
     )
 
+    # ---------------------------------------------------------------
+    # Final report.
+    # ---------------------------------------------------------------
+
     print()
     print(
         "Completed successfully."
@@ -1559,15 +1730,15 @@ def main():
     print()
     print(
         f"MDX files processed : "
-        f"{len(results)}"
+        f"{successful}"
     )
     print(
-        f"Terms extracted     : "
-        f"{len(term_rows)}"
+        f"Unique terms        : "
+        f"{len(term_rows):,}"
     )
     print(
         f"Context records     : "
-        f"{len(context_rows)}"
+        f"{len(context_rows):,}"
     )
     print()
     print(
