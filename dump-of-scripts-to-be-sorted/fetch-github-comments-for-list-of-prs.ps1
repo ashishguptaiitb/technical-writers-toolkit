@@ -1,15 +1,12 @@
 <#
 .SYNOPSIS
-Retrieves GitHub PR review comments for a list of pull requests and exports
-them to a consolidated TSV report.
+Retrieves GitHub PR review comments for a list of pull requests and exports them to a consolidated TSV report.
 
 .PREREQUISITES
 - GitHub CLI (gh) installed and authenticated.
 - ikawaha/gh-pr-comments extension installed.
 
-Generate the PR list using:
-
-gh pr list --state closed --label "PendingFixes" --json number --jq ".[].number" > pr_numbers.txt
+Generate the PR list using (authenticate with github to run gh command first) another script that generates a list of PRs with review comments.
 #>
 
 # Prompt for the PR list file.
